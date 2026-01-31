@@ -3,7 +3,7 @@
 This script tests the functionality of the replay buffer including
 capacity limits, sampling, and randomness.
 """
-from lunar_lander.replay_buffer import ReplayBuffer
+from dqn_lunar_lander.replay_buffer import ReplayBuffer
 
 
 def test_replay_buffer() -> None:
