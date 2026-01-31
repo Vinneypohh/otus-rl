@@ -209,3 +209,5 @@ __marimo__/
 uv.lock
 checkpoint.pth
 taxi/checkpoints/taxi_agent.pkl
+
+sbx.py
