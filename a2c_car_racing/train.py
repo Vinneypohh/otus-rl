@@ -26,6 +26,7 @@ class Config:
     LR = 3e-4
     GAMMA = 0.99
     ENTROPY_COEF = 0.05
+    TAU = 0.005  # Мягкое обновление целевой сети: θ_target = TAU*θ_target + (1-TAU)*θ
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     TARGET_SCORE = 500  # Цель для сохранения
 
@@ -81,6 +82,7 @@ def train(cfg: Config):
         lr=cfg.LR,
         gamma=cfg.GAMMA,
         entropy_coef=cfg.ENTROPY_COEF,
+        tau=cfg.TAU,
     )
 
     scores = []  # История всех очков
@@ -118,15 +120,12 @@ def train(cfg: Config):
                 if done:
                     next_val = 0
                 else:
-                    # state -> Tensor -> Model -> Value
-                    state_t = torch.FloatTensor(state).unsqueeze(0).to(cfg.DEVICE)
-                    # Используем torch.no_grad(), чтобы не копить градиенты тут
-                    with torch.no_grad():
-                        _, _, next_val = model(state_t)
-                        next_val = next_val.item()
+                    # Bootstrap через целевую сеть (V_target), а не текущую — стабилизирует обучение
+                    next_val = agent.bootstrap_value(state)
 
                 # 3. Обучение
                 agent.learn(next_value=next_val)
+                agent.update_target()
 
             # Эпизод завершен
             scores_window.append(score)

@@ -211,3 +211,5 @@ checkpoint.pth
 taxi/checkpoints/taxi_agent.pkl
 
 sbx.py
+
+*/what_in_folder.md
