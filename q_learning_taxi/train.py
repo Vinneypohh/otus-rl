@@ -3,10 +3,11 @@
 This module provides functions for training a tabular Q-Learning agent
 on the Taxi-v3 environment from Gymnasium.
 """
+
 import os
 import pickle
 import time
-from typing import List, Optional
+from typing import List
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -22,16 +23,16 @@ DEFAULT_EPSILON_MIN = 0.01
 DEFAULT_EPISODES = 10000
 PROGRESS_INTERVAL = 500
 WINDOW_SIZE = 100
-PLOT_PATH = 'taxi/images/taxi_training.png'
+PLOT_PATH = "taxi/images/taxi_training.png"
 AGENT_PATH = "taxi/checkpoints/taxi_agent.pkl"
 
 
 class QLearningAgent:
     """Tabular Q-Learning agent for discrete state-action spaces.
-    
+
     This agent maintains a Q-table that stores Q-values for all state-action pairs.
     It uses epsilon-greedy exploration and updates Q-values using the Q-learning algorithm.
-    
+
     Attributes:
         n_states: Number of states in the environment.
         n_actions: Number of actions in the environment.
@@ -42,7 +43,7 @@ class QLearningAgent:
         epsilon_min: Minimum exploration probability.
         q_table: Q-table storing Q-values for all state-action pairs.
     """
-    
+
     def __init__(
         self,
         n_states: int,
@@ -51,10 +52,10 @@ class QLearningAgent:
         gamma: float = DEFAULT_GAMMA,
         epsilon: float = DEFAULT_EPSILON,
         epsilon_decay: float = DEFAULT_EPSILON_DECAY,
-        epsilon_min: float = DEFAULT_EPSILON_MIN
+        epsilon_min: float = DEFAULT_EPSILON_MIN,
     ) -> None:
         """Initialize the Q-Learning agent.
-        
+
         Args:
             n_states: Number of states in the environment.
             n_actions: Number of actions in the environment.
@@ -76,11 +77,11 @@ class QLearningAgent:
 
     def choose_action(self, state: int, is_training: bool = True) -> int:
         """Choose an action using epsilon-greedy policy.
-        
+
         Args:
             state: Current state index.
             is_training: Whether to use exploration. If False, always uses greedy policy.
-            
+
         Returns:
             Selected action index.
         """
@@ -91,7 +92,7 @@ class QLearningAgent:
 
     def update(self, state: int, action: int, reward: float, next_state: int) -> None:
         """Update Q-table using the Q-learning update rule.
-        
+
         Args:
             state: Current state index.
             action: Action taken in the current state.
@@ -109,7 +110,7 @@ class QLearningAgent:
 
     def save(self, filename: str) -> None:
         """Save the learned Q-table to disk.
-        
+
         Args:
             filename: Path to save the Q-table.
         """
@@ -120,7 +121,7 @@ class QLearningAgent:
 
     def load(self, filename: str) -> None:
         """Load a previously saved Q-table from disk.
-        
+
         Args:
             filename: Path to load the Q-table from.
         """
@@ -133,26 +134,23 @@ class QLearningAgent:
 
 
 def train_agent(
-    episodes: int = DEFAULT_EPISODES,
-    agent_path: str = AGENT_PATH,
-    render: bool = False
+    episodes: int = DEFAULT_EPISODES, agent_path: str = AGENT_PATH, render: bool = False
 ) -> List[float]:
     """Train a Q-learning agent in Taxi-v3 environment.
-    
+
     Args:
         episodes: Number of training episodes. Defaults to 10000.
         agent_path: Path to save the trained agent. Defaults to AGENT_PATH.
         render: Whether to render the environment during training. Defaults to False.
-        
+
     Returns:
         List of total rewards for each episode.
     """
-    render_mode = 'human' if render else None
-    env = gym.make('Taxi-v3', render_mode=render_mode)
+    render_mode = "human" if render else None
+    env = gym.make("Taxi-v3", render_mode=render_mode)
 
     agent = QLearningAgent(
-        n_states=env.observation_space.n,
-        n_actions=env.action_space.n
+        n_states=env.observation_space.n, n_actions=env.action_space.n
     )
 
     rewards_history: List[float] = []
@@ -179,7 +177,7 @@ def train_agent(
         if (i + 1) % PROGRESS_INTERVAL == 0:
             avg_rew = np.mean(rewards_history[-WINDOW_SIZE:])
             print(
-                f"Episode {i+1}, "
+                f"Episode {i + 1}, "
                 f"Epsilon: {agent.epsilon:.3f}, "
                 f"Avg reward (last {WINDOW_SIZE}): {avg_rew:.2f}"
             )
@@ -191,29 +189,25 @@ def train_agent(
 
 def plot_results(rewards: List[float], plot_path: str = PLOT_PATH) -> None:
     """Plot moving average reward and save the figure.
-    
+
     Args:
         rewards: List of episode rewards.
         plot_path: Path to save the plot. Defaults to PLOT_PATH.
     """
-    moving_avg = np.convolve(
-        rewards,
-        np.ones(WINDOW_SIZE) / WINDOW_SIZE,
-        mode='valid'
-    )
+    moving_avg = np.convolve(rewards, np.ones(WINDOW_SIZE) / WINDOW_SIZE, mode="valid")
 
     plt.figure(figsize=(10, 5))
     plt.plot(
         moving_avg,
-        label=f'Average reward ({WINDOW_SIZE}-episode window)',
-        color='orange'
+        label=f"Average reward ({WINDOW_SIZE}-episode window)",
+        color="orange",
     )
-    plt.title('Taxi-v3 Q-learning training')
-    plt.xlabel('Episodes')
-    plt.ylabel('Reward')
+    plt.title("Taxi-v3 Q-learning training")
+    plt.xlabel("Episodes")
+    plt.ylabel("Reward")
     plt.grid(True)
     plt.legend()
-    
+
     os.makedirs(os.path.dirname(plot_path), exist_ok=True)
     plt.savefig(plot_path)
     plt.show()
@@ -221,18 +215,15 @@ def plot_results(rewards: List[float], plot_path: str = PLOT_PATH) -> None:
 
 def test_agent(episodes: int, agent_path: str) -> None:
     """Run the trained agent with human rendering to visually inspect behavior.
-    
+
     Args:
         episodes: Number of test episodes to run.
         agent_path: Path to load the trained agent from.
     """
     print("\n--- TEST RUN (HUMAN RENDER) ---")
-    env = gym.make('Taxi-v3', render_mode='human')
+    env = gym.make("Taxi-v3", render_mode="human")
 
-    agent = QLearningAgent(
-        env.observation_space.n,
-        env.action_space.n
-    )
+    agent = QLearningAgent(env.observation_space.n, env.action_space.n)
     agent.load(agent_path)
 
     for i in range(episodes):
@@ -240,7 +231,7 @@ def test_agent(episodes: int, agent_path: str) -> None:
         terminated = False
         truncated = False
         total_reward = 0.0
-        print(f"Episode {i+1} started...")
+        print(f"Episode {i + 1} started...")
 
         while not terminated and not truncated:
             # Use greedy policy (no exploration)
@@ -248,7 +239,7 @@ def test_agent(episodes: int, agent_path: str) -> None:
             state, reward, terminated, truncated, _ = env.step(action)
             total_reward += reward
 
-        print(f"Episode {i+1} finished. Reward: {total_reward}")
+        print(f"Episode {i + 1} finished. Reward: {total_reward}")
         time.sleep(1)  # Pause between episodes
 
     env.close()
@@ -256,10 +247,12 @@ def test_agent(episodes: int, agent_path: str) -> None:
 
 def main() -> None:
     """Main training function."""
-    rewards = train_agent(episodes=DEFAULT_EPISODES, agent_path=AGENT_PATH, render=False)
+    rewards = train_agent(
+        episodes=DEFAULT_EPISODES, agent_path=AGENT_PATH, render=False
+    )
     plot_results(rewards, PLOT_PATH)
     test_agent(episodes=100, agent_path=AGENT_PATH)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

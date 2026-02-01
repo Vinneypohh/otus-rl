@@ -3,18 +3,19 @@
 This script demonstrates how to inspect model parameters
 and count the total number of parameters in a neural network.
 """
+
 import torch
 import torch.nn as nn
 
 
 class SimpleModel(nn.Module):
     """Simple feedforward neural network for testing.
-    
+
     Attributes:
         linear1: First linear layer (10 -> 20).
         linear2: Second linear layer (20 -> 1).
     """
-    
+
     def __init__(self) -> None:
         """Initialize the simple model."""
         super(SimpleModel, self).__init__()
@@ -23,10 +24,10 @@ class SimpleModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the network.
-        
+
         Args:
             x: Input tensor of shape (batch_size, 10).
-            
+
         Returns:
             Output tensor of shape (batch_size, 1).
         """

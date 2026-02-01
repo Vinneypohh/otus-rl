@@ -3,6 +3,7 @@
 This script tests the functionality of the replay buffer including
 capacity limits, sampling, and randomness.
 """
+
 from dqn_lunar_lander.replay_buffer import ReplayBuffer
 
 
@@ -20,7 +21,7 @@ def test_replay_buffer() -> None:
         reward = i * 10  # Fake reward
         next_state = [i + 1, i + 1]
         done = False
-        
+
         print(f"   Adding experience #{i} -> Action {action}")
         buffer.push(state, action, reward, next_state, done)
 

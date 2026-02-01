@@ -8,17 +8,21 @@ import seaborn as sns
 from collections import deque
 from typing import List
 
-
 from a2c_model import ActorCritic
 from a2c_agent import A2CAgent
 from wrappers import CarRacingWrapper
+from env_batch import ParallelEnvBatch, EnvBatch
 
-ROOT_DIR = "/Users/nabandurko/repos/otus-rl/a2c_car_racing"
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # === КОНФИГУРАЦИЯ ===
 class Config:
     EPISODES = 2000
+    NENVS = 8  # число параллельных сред (как в Practical RL: nenvs=8)
+    USE_PARALLEL = (
+        True  # True — ParallelEnvBatch (процессы), False — EnvBatch (последовательно)
+    )
     ROLLOUT_STEPS = 20
     SCORES_WINDOW_SIZE = 100
     CHECKPOINT_PATH = str(os.path.join(ROOT_DIR, "checkpoint_a2c_car_racing.pth"))
@@ -26,18 +30,18 @@ class Config:
     LR = 3e-4
     GAMMA = 0.99
     ENTROPY_COEF = 0.05
-    TAU = 0.005  # Мягкое обновление целевой сети: θ_target = TAU*θ_target + (1-TAU)*θ
+    TAU = 0.005
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    TARGET_SCORE = 500  # Цель для сохранения
+    TARGET_SCORE = 500
 
 
-def create_env():
-    """Создает и оборачивает среду."""
+def make_env():
+    """Фабрика одной среды (для батча вызывается nenvs раз)."""
     env = gym.make(
         "CarRacing-v3",
         render_mode="rgb_array",
         lap_complete_percent=0.95,
-        domain_randomize=False,  # False для начала, True для усложнения потом
+        domain_randomize=False,
         continuous=True,
     )
     env = CarRacingWrapper(env, stack_frames=4)
@@ -70,12 +74,13 @@ def plot_training_results(scores: List[float], filename: str):
 
 
 def train(cfg: Config):
-    env = create_env()
+    if cfg.USE_PARALLEL:
+        env = ParallelEnvBatch(make_env, cfg.NENVS)
+    else:
+        env = EnvBatch(make_env, cfg.NENVS)
+    nenvs = env.nenvs
 
-    # Инициализация модели и агента
-    # Переносим на девайс сразу
     model = ActorCritic(action_dim=3).to(cfg.DEVICE)
-
     agent = A2CAgent(
         model=model,
         device=cfg.DEVICE,
@@ -85,79 +90,66 @@ def train(cfg: Config):
         tau=cfg.TAU,
     )
 
-    scores = []  # История всех очков
+    scores = []
     scores_window = deque(maxlen=cfg.SCORES_WINDOW_SIZE)
     best_avg_score = -np.inf
+    running_rewards = np.zeros(nenvs)
+    iteration = 0
 
-    print(f"Starting training on {cfg.DEVICE}...")
+    print(
+        f"Starting training on {cfg.DEVICE} with {nenvs} envs (parallel={cfg.USE_PARALLEL})..."
+    )
 
     try:
-        for i_episode in range(1, cfg.EPISODES + 1):
-            state, _ = env.reset()
-            score = 0.0
-            done = False
+        obs, _ = env.reset()
+        while len(scores) < cfg.EPISODES:
+            for _ in range(cfg.ROLLOUT_STEPS):
+                actions = agent.act_batch(obs)
+                next_obs, rewards, terminated, truncated, _ = env.step(actions)
+                done = terminated | truncated
+                agent.push_rewards_dones(rewards, done.astype(np.float32))
+                running_rewards += rewards
+                for j in range(nenvs):
+                    if done[j]:
+                        scores.append(float(running_rewards[j]))
+                        scores_window.append(float(running_rewards[j]))
+                        running_rewards[j] = 0.0
+                obs = next_obs
 
-            while not done:
-                # 1. Сбор Rollout
-                for _ in range(cfg.ROLLOUT_STEPS):
-                    action = agent.act(state)
+            bootstrap = agent.bootstrap_value_batch(obs)
+            next_values = np.where(done, 0.0, bootstrap).astype(np.float32)
+            agent.learn(next_values=next_values)
+            agent.update_target()
 
-                    next_state, reward, terminated, truncated, _ = env.step(action)
-                    done = terminated or truncated
-
-                    # Важно: В CarRacing за каждый кадр дают -0.1 очко.
-                    # Можно чуть подкрутить награду тут (reward clipping), если хочется.
-                    # Но пока оставим как есть.
-                    agent.rewards.append(reward)
-
-                    state = next_state
-                    score += reward
-
-                    if done:
-                        break
-
-                # 2. Bootstrap (Хвост)
-                if done:
-                    next_val = 0
-                else:
-                    # Bootstrap через целевую сеть (V_target), а не текущую — стабилизирует обучение
-                    next_val = agent.bootstrap_value(state)
-
-                # 3. Обучение
-                agent.learn(next_value=next_val)
-                agent.update_target()
-
-            # Эпизод завершен
-            scores_window.append(score)
-            scores.append(score)
-            avg_score = np.mean(scores_window)
-
-            # Логирование
-            print(
-                f"\rEpisode {i_episode}\tScore: {score:.2f}\tAvg: {avg_score:.2f}",
-                end="",
-            )
-
-            # Сохранение и отчет каждые 20 эпизодов
-            if i_episode % 20 == 0:
-                print(
-                    f"\rEpisode {i_episode}\tScore: {score:.2f}\tAvg: {avg_score:.2f}"
+            iteration += 1
+            if len(scores) == 0:
+                avg_score = 0.0
+            else:
+                avg_score = (
+                    np.mean(scores_window) if scores_window else np.mean(scores[-100:])
                 )
+            n_ep = len(scores)
+            print(f"\rIter {iteration}\tEpisodes {n_ep}\tAvg: {avg_score:.2f}", end="")
+
+            if n_ep >= 20 and n_ep % 20 < nenvs:
+                print(f"\rIter {iteration}\tEpisodes {n_ep}\tAvg: {avg_score:.2f}")
                 plot_training_results(scores, cfg.PLOT_PATH)
 
-            # Сохраняем лучшую модель (если она реально хорошая, > 0)
             if avg_score > best_avg_score and avg_score > 0:
                 best_avg_score = avg_score
                 torch.save(model.state_dict(), cfg.CHECKPOINT_PATH)
                 print(f"\nNew Best Model Saved! Avg Score: {best_avg_score:.2f}")
 
             if avg_score >= cfg.TARGET_SCORE:
-                print(f"\nSolved in {i_episode} episodes!")
+                print(f"\nSolved in {n_ep} episodes!")
                 break
 
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving plot...")
         plot_training_results(scores, cfg.PLOT_PATH)
+    finally:
+        if hasattr(env, "close"):
+            env.close()
 
     return scores
 
