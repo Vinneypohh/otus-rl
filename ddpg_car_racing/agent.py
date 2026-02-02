@@ -7,33 +7,34 @@ from utils import ReplayBuffer, OUNoise
 
 
 class DDPGAgent:
-    def __init__(self, state_dim, action_dim, device):
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        device,
+        lr_actor=1e-4,
+        lr_critic=1e-3,
+        gamma=0.99,
+        tau=0.005,
+        memory_size=100_000,
+    ):
         self.device = device
         self.action_dim = action_dim
+        self.gamma = gamma
+        self.tau = tau
 
-        # 1. Основные сети
         self.actor = Actor(state_dim, action_dim).to(device)
         self.critic = Critic(state_dim, action_dim).to(device)
-
-        # 2. Target сети (клоны)
         self.actor_target = Actor(state_dim, action_dim).to(device)
         self.critic_target = Critic(state_dim, action_dim).to(device)
-
-        # Копируем веса 1-в-1 в начале
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.critic_target.load_state_dict(self.critic.state_dict())
 
-        # 3. Оптимизаторы
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-4)
-        self.critic_optimizer = optim.Adam(
-            self.critic.parameters(), lr=1e-3
-        )  # Critic учится быстрее
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr_actor)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr_critic)
 
-        self.memory = ReplayBuffer(100000)
+        self.memory = ReplayBuffer(memory_size)
         self.noise = OUNoise(action_dim)
-
-        self.gamma = 0.99
-        self.tau = 0.005  # Коэффициент мягкого обновления (0.5%)
 
     def act(self, state, add_noise=True):
         state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
@@ -47,12 +48,24 @@ class DDPGAgent:
             noise = self.noise.sample()
             action += noise
 
-        # Обязательно обрезаем (clip), чтобы не выйти за рамки физики
-        # Руль: -1..1, Газ/Тормоз: 0..1 (хотя sigmoid и так 0..1, но шум может вывести за пределы)
         action[0] = np.clip(action[0], -1, 1)
         action[1] = np.clip(action[1], 0, 1)
         action[2] = np.clip(action[2], 0, 1)
+        return action
 
+    def act_batch(self, states, add_noise=True):
+        """states (nenvs, 4, 84, 84) -> actions (nenvs, 3)."""
+        state_t = torch.FloatTensor(states).to(self.device)
+        self.actor.eval()
+        with torch.no_grad():
+            action = self.actor(state_t).cpu().numpy()
+        self.actor.train()
+        if add_noise:
+            noise_batch = np.array([self.noise.sample() for _ in range(len(action))])
+            action += noise_batch
+        action[:, 0] = np.clip(action[:, 0], -1, 1)
+        action[:, 1] = np.clip(action[:, 1], 0, 1)
+        action[:, 2] = np.clip(action[:, 2], 0, 1)
         return action
 
     def learn(self, batch_size):

@@ -38,7 +38,8 @@ class Actor(nn.Module):
         )
 
     def forward(self, state):
-        x = self.fc(self.cnn(state))
+        x = state.float() / 255.0
+        x = self.fc(self.cnn(x))
         steering = torch.tanh(x[:, 0]).unsqueeze(1)  # [-1, 1]
         gas = torch.sigmoid(x[:, 1]).unsqueeze(1)  # [0, 1]
         brake = torch.sigmoid(x[:, 2]).unsqueeze(1)  # [0, 1]
@@ -70,8 +71,8 @@ class Critic(nn.Module):
         )
 
     def forward(self, state, action):
-        # 1. Прогоняем картинку
-        cnn_features = self.cnn(state)
+        x = state.float() / 255.0
+        cnn_features = self.cnn(x)
 
         # 2. Объединяем картинку и действие
         x = torch.cat([cnn_features, action], dim=1)
