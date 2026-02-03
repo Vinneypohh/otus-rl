@@ -22,7 +22,7 @@ EPISODES = 1000
 MAX_STEPS = 1000
 TARGET_SCORE = 500
 CHECKPOINT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE = os.path.join(CHECKPOINT_DIR, "ddpg_training.log")
+LOG_FILE = os.path.join(CHECKPOINT_DIR, "checkpoints", "ddpg_training.log")
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 
