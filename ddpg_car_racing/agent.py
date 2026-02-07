@@ -53,21 +53,6 @@ class DDPGAgent:
         action[2] = np.clip(action[2], 0, 1)
         return action
 
-    def act_batch(self, states, add_noise=True):
-        """states (nenvs, 4, 84, 84) -> actions (nenvs, 3)."""
-        state_t = torch.FloatTensor(states).to(self.device)
-        self.actor.eval()
-        with torch.no_grad():
-            action = self.actor(state_t).cpu().numpy()
-        self.actor.train()
-        if add_noise:
-            noise_batch = np.array([self.noise.sample() for _ in range(len(action))])
-            action += noise_batch
-        action[:, 0] = np.clip(action[:, 0], -1, 1)
-        action[:, 1] = np.clip(action[:, 1], 0, 1)
-        action[:, 2] = np.clip(action[:, 2], 0, 1)
-        return action
-
     def learn(self, batch_size):
         if len(self.memory) < batch_size:
             return

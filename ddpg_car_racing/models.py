@@ -1,20 +1,6 @@
-# Actor:
-# CNN как раньше (Conv2d -> ReLU).
-# Потом Flatten.
-# Потом Linear слои.
-# На выходе 3 нейрона.
-# Для руля используй tanh (диапазон -1..1).
-# Для газа/тормоза используй sigmoid (диапазон 0..1).
-
-# Critic:
-# CNN для обработки картинки.
-# Flatten.
-# Внимание: В этот момент у тебя есть вектор фичей картинки (например, размер 256) и вектор действия (размер 3).
-# Ты должен их склеить: torch.cat([cnn_out, action], dim=1).
-# Дальше идут Linear слои.
-# Выход: 1 нейрон (без активации).
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class Actor(nn.Module):
@@ -40,10 +26,10 @@ class Actor(nn.Module):
     def forward(self, state):
         x = state.float() / 255.0
         x = self.fc(self.cnn(x))
-        steering = torch.tanh(x[:, 0]).unsqueeze(1)  # [-1, 1]
-        gas = torch.sigmoid(x[:, 1]).unsqueeze(1)  # [0, 1]
-        brake = torch.sigmoid(x[:, 2]).unsqueeze(1)  # [0, 1]
-        return torch.cat([steering, gas, brake], dim=1)
+        outs = F.relu(x)
+        means = self.mean(outs)
+        stds = self.logstd.exp()
+        return means, stds
 
 
 class Critic(nn.Module):

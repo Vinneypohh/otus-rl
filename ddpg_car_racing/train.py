@@ -9,7 +9,6 @@ from collections import deque
 
 from agent import DDPGAgent
 from utils import CarRacingWrapper
-from env_batch import ParallelEnvBatch, EnvBatch
 
 # Конфиг
 BATCH_SIZE = 64
@@ -22,7 +21,7 @@ EPISODES = 1000
 MAX_STEPS = 1000
 TARGET_SCORE = 500
 CHECKPOINT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE = os.path.join(CHECKPOINT_DIR, "checkpoints", "ddpg_training.log")
+LOG_FILE = os.path.join(CHECKPOINT_DIR, "ddpg_training.log")
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 
@@ -41,14 +40,10 @@ def setup_logging():
     )
     logger.info(f"Logging: console + file {LOG_FILE}")
 
-# Ускорение: батч сред и несколько шагов обучения за rollout
-NENVS = 8
-USE_PARALLEL = True
-ROLLOUT_STEPS = 10
-LEARN_STEPS = 4
 
+def train():
+    setup_logging()
 
-def make_env():
     env = gym.make(
         "CarRacing-v3",
         continuous=True,
@@ -56,20 +51,10 @@ def make_env():
         lap_complete_percent=0.95,
         domain_randomize=False,
     )
-    return CarRacingWrapper(env, stack_frames=4)
-
-
-def train():
-    setup_logging()
-
-    if USE_PARALLEL:
-        env = ParallelEnvBatch(make_env, NENVS)
-    else:
-        env = EnvBatch(make_env, NENVS)
-    nenvs = env.nenvs
+    env = CarRacingWrapper(env, stack_frames=4)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Device: {device}, nenvs: {nenvs}, parallel: {USE_PARALLEL}")
+    logger.info(f"Device: {device}")
 
     agent = DDPGAgent(
         state_dim=4,
@@ -84,89 +69,75 @@ def train():
     best_score = -100
     scores = []
     scores_window = deque(maxlen=100)
-    running_rewards = np.zeros(nenvs)
 
     try:
-        obs, _ = env.reset()
-        total_episodes = 0
+        for i_episode in range(1, EPISODES + 1):
+            state, _ = env.reset()
+            score = 0
+            agent.noise.reset()
 
-        while total_episodes < EPISODES:
-            for _ in range(ROLLOUT_STEPS):
-                actions = agent.act_batch(obs, add_noise=True)
-                action_list = [actions[j] for j in range(nenvs)]
-                next_obs, rewards, terminated, truncated, _ = env.step(action_list)
-                done = terminated | truncated
+            for t in range(MAX_STEPS):
+                action = agent.act(state, add_noise=True)
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
 
-                for j in range(nenvs):
-                    agent.memory.add(
-                        obs[j].copy(),
-                        actions[j].copy(),
-                        float(rewards[j]),
-                        next_obs[j].copy(),
-                        bool(done[j]),
-                    )
-                    running_rewards[j] += rewards[j]
-                    if done[j]:
-                        scores.append(float(running_rewards[j]))
-                        scores_window.append(float(running_rewards[j]))
-                        total_episodes += 1
-                        running_rewards[j] = 0.0
-
-                obs = next_obs
-
-            for _ in range(LEARN_STEPS):
+                agent.memory.add(state, action, reward, next_state, done)
                 agent.learn(BATCH_SIZE)
 
-            if total_episodes >= 20:
-                agent.noise.sigma = max(0.1, agent.noise.sigma * 0.9995)
+                state = next_state
+                score += reward
 
-            if len(scores_window) > 0:
-                avg_score = np.mean(scores_window)
-                print(f"\rEpisodes {total_episodes}\tAvg: {avg_score:.2f}", end="", flush=True)
-
-                if total_episodes % 20 < nenvs:
-                    print(f"\rEpisodes {total_episodes}\tAvg: {avg_score:.2f}")
-                    logger.info(f"Episodes {total_episodes}, Avg: {avg_score:.2f}")
-                    torch.save(
-                        agent.actor.state_dict(),
-                        os.path.join(CHECKPOINT_DIR, "actor_checkpoint.pth"),
-                    )
-                    torch.save(
-                        agent.critic.state_dict(),
-                        os.path.join(CHECKPOINT_DIR, "critic_checkpoint.pth"),
-                    )
-
-                if avg_score > best_score:
-                    best_score = avg_score
-                    torch.save(
-                        agent.actor.state_dict(),
-                        os.path.join(CHECKPOINT_DIR, "best_actor.pth"),
-                    )
-                    torch.save(
-                        agent.critic.state_dict(),
-                        os.path.join(CHECKPOINT_DIR, "best_critic.pth"),
-                    )
-                    logger.info(f"New Best Score: {best_score:.2f} -> Model Saved!")
-
-                if avg_score >= TARGET_SCORE:
-                    logger.success(
-                        f"Solved! Average score over 100 episodes: {avg_score:.2f}"
-                    )
-                    torch.save(
-                        agent.actor.state_dict(),
-                        os.path.join(CHECKPOINT_DIR, "solved_actor.pth"),
-                    )
+                if done:
                     break
 
-        if len(scores_window) > 0 and np.mean(scores_window) < TARGET_SCORE:
+            scores_window.append(score)
+            scores.append(score)
+            avg_score = np.mean(scores_window)
+
+            print(f"\rEpisode {i_episode}\tScore: {score:.2f}\tAvg: {avg_score:.2f}", end="", flush=True)
+
+            if i_episode % 20 == 0:
+                print(f"\rEpisode {i_episode}\tScore: {score:.2f}\tAvg: {avg_score:.2f}")
+                logger.info(f"Episode {i_episode}, Avg: {avg_score:.2f}")
+                torch.save(
+                    agent.actor.state_dict(),
+                    os.path.join(CHECKPOINT_DIR, "actor_checkpoint.pth"),
+                )
+                torch.save(
+                    agent.critic.state_dict(),
+                    os.path.join(CHECKPOINT_DIR, "critic_checkpoint.pth"),
+                )
+
+            if avg_score > best_score:
+                best_score = avg_score
+                torch.save(
+                    agent.actor.state_dict(),
+                    os.path.join(CHECKPOINT_DIR, "best_actor.pth"),
+                )
+                torch.save(
+                    agent.critic.state_dict(),
+                    os.path.join(CHECKPOINT_DIR, "best_critic.pth"),
+                )
+                logger.info(f"New Best Score: {best_score:.2f} -> Model Saved!")
+
+            if avg_score >= TARGET_SCORE:
+                logger.success(
+                    f"Solved! Average score over 100 episodes: {avg_score:.2f}"
+                )
+                torch.save(
+                    agent.actor.state_dict(),
+                    os.path.join(CHECKPOINT_DIR, "solved_actor.pth"),
+                )
+                break
+
+            agent.noise.sigma = max(0.1, agent.noise.sigma * 0.999)
+
+        if np.mean(scores_window) < TARGET_SCORE:
             print()
 
     except KeyboardInterrupt:
         print("\nInterrupted.")
         logger.warning("Training interrupted by user")
-    finally:
-        if hasattr(env, "close"):
-            env.close()
 
     plt.figure(figsize=(10, 6))
     plt.plot(scores, alpha=0.3, color="cyan")
