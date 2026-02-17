@@ -6,27 +6,20 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from collections import deque
-from typing import List
+from typing import List, Callable
 
 from a2c_model import ActorCritic
 from a2c_agent import A2CAgent
 from wrappers import CarRacingWrapper
-from env_batch import ParallelEnvBatch, EnvBatch
-
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 # === КОНФИГУРАЦИЯ ===
 class Config:
     EPISODES = 2000
-    NENVS = 8  # число параллельных сред (как в Practical RL: nenvs=8)
-    USE_PARALLEL = (
-        True  # True — ParallelEnvBatch (процессы), False — EnvBatch (последовательно)
-    )
-    ROLLOUT_STEPS = 20
+    NENVS = 8              
+    ROLLOUT_STEPS = 20     # N-step learning
     SCORES_WINDOW_SIZE = 100
-    CHECKPOINT_PATH = str(os.path.join(ROOT_DIR, "checkpoint_a2c_car_racing.pth"))
-    PLOT_PATH = str(os.path.join(ROOT_DIR, "training_plot.png"))
+    CHECKPOINT_PATH = "checkpoint_a2c_car_racing.pth"
+    PLOT_PATH = "training_plot.png"
     LR = 3e-4
     GAMMA = 0.99
     ENTROPY_COEF = 0.05
@@ -34,24 +27,22 @@ class Config:
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     TARGET_SCORE = 500
 
-
-def make_env():
-    """Фабрика одной среды (для батча вызывается nenvs раз)."""
-    env = gym.make(
-        "CarRacing-v3",
-        render_mode="rgb_array",
-        lap_complete_percent=0.95,
-        domain_randomize=False,
-        continuous=True,
-    )
-    env = CarRacingWrapper(env, stack_frames=4)
-    return env
-
+# === ФАБРИКА СРЕД ===
+def make_env() -> Callable:
+    def _thunk():
+        env = gym.make(
+            "CarRacing-v3",
+            render_mode="rgb_array",
+            lap_complete_percent=0.95,
+            domain_randomize=False,
+            continuous=True,
+        )
+        env = CarRacingWrapper(env, stack_frames=4)
+        return env
+    return _thunk
 
 def plot_training_results(scores: List[float], filename: str):
-    """Рисует и сохраняет график обучения."""
     sns.set_theme(style="darkgrid")
-
     data = pd.DataFrame({"Score": scores})
     data["Average"] = data["Score"].rolling(window=100, min_periods=1).mean()
 
@@ -59,26 +50,16 @@ def plot_training_results(scores: List[float], filename: str):
     plt.plot(data["Score"], label="Episode Score", alpha=0.3, color="cyan")
     plt.plot(data["Average"], label="Moving Average (100)", color="blue", linewidth=2)
     plt.axhline(y=Config.TARGET_SCORE, color="red", linestyle="--", label="Target")
-
     plt.title("A2C CarRacing Training")
-    plt.xlabel("Episode")
-    plt.ylabel("Score")
     plt.legend()
-    plt.tight_layout()
     plt.savefig(filename)
-    plt.close()  # Закрываем, чтобы не висело в памяти
-    print(f"Plot saved to {filename}")
+    plt.close()
 
-
-# === ГЛАВНЫЙ ЦИКЛ ОБУЧЕНИЯ ===
-
-
+# === ГЛАВНЫЙ ЦИКЛ ===
 def train(cfg: Config):
-    if cfg.USE_PARALLEL:
-        env = ParallelEnvBatch(make_env, cfg.NENVS)
-    else:
-        env = EnvBatch(make_env, cfg.NENVS)
-    nenvs = env.nenvs
+    envs = gym.vector.AsyncVectorEnv([make_env() for _ in range(cfg.NENVS)])
+    
+    print(f"Training on {cfg.DEVICE} with {cfg.NENVS} envs...")
 
     model = ActorCritic(action_dim=3).to(cfg.DEVICE)
     agent = A2CAgent(
@@ -93,67 +74,83 @@ def train(cfg: Config):
     scores = []
     scores_window = deque(maxlen=cfg.SCORES_WINDOW_SIZE)
     best_avg_score = -np.inf
-    running_rewards = np.zeros(nenvs)
-    iteration = 0
-
-    print(
-        f"Starting training on {cfg.DEVICE} with {nenvs} envs (parallel={cfg.USE_PARALLEL})..."
-    )
+    
+    # Трекер текущих наград для каждой среды
+    current_episode_rewards = np.zeros(cfg.NENVS)
+    
+    # Счетчик общих эпизодов (сумма по всем средам)
+    total_episodes_done = 0
 
     try:
-        obs, _ = env.reset()
-        while len(scores) < cfg.EPISODES:
+        # Сброс всех сред сразу
+        obs, _ = envs.reset()
+        
+        while total_episodes_done < cfg.EPISODES:
+            # 1. Сбор данных (Rollout)
             for _ in range(cfg.ROLLOUT_STEPS):
+                # Агент выбирает действия для ВСЕХ сред сразу
                 actions = agent.act_batch(obs)
-                next_obs, rewards, terminated, truncated, _ = env.step(actions)
-                done = terminated | truncated
-                agent.push_rewards_dones(rewards, done.astype(np.float32))
-                running_rewards += rewards
-                for j in range(nenvs):
-                    if done[j]:
-                        scores.append(float(running_rewards[j]))
-                        scores_window.append(float(running_rewards[j]))
-                        running_rewards[j] = 0.0
+                
+                # Шаг во всех средах
+                next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+                dones = terminations | truncations
+                
+                # Сохраняем награды для обучения
+                agent.push_rewards_dones(rewards, dones.astype(np.float32))
+                
+                # Обновляем статистику
+                current_episode_rewards += rewards
+                
+                # Если среда завершилась, gym.vector.AsyncVectorEnv САМ делает reset!
+                # Нам нужно только записать результат.
+                for i, done in enumerate(dones):
+                    if done:
+                        final_score = current_episode_rewards[i]
+                        scores.append(final_score)
+                        scores_window.append(final_score)
+                        current_episode_rewards[i] = 0.0
+                        total_episodes_done += 1
+                        
+                        # Логирование
+                        avg = np.mean(scores_window)
+                        print(f"\rEp: {total_episodes_done}\tScore: {final_score:.1f}\tAvg: {avg:.1f}", end="")
+                
                 obs = next_obs
 
-            bootstrap = agent.bootstrap_value_batch(obs)
-            next_values = np.where(done, 0.0, bootstrap).astype(np.float32)
-            agent.learn(next_values=next_values)
+            # 2. Обучение (Update)
+            # Считаем Bootstrap Value для последних состояний
+            bootstrap_values = agent.bootstrap_value_batch(obs)
+            
+            # Если среда только что закончилась (done=True), то V(s') = 0.
+            # Но векторный env уже сбросил среду и вернул s_new (начало новой игры).
+            # В идеале нужно брать V(s_terminal) из infos, но для A2C часто просто берут V(s_new)*(1-done).
+            # Пока оставим твою логику:
+            # next_values = np.where(dones, 0.0, bootstrap_values)
+            # Внимание: dones тут от ПОСЛЕДНЕГО шага роллаута.
+            
+            # Правильнее так:
+            # Если на последнем шаге done, то мы не бутстрапим (0).
+            # Если не done, то бутстрапим от V(obs).
+            # Переменная dones у нас есть с конца цикла for.
+            next_values = np.where(dones, 0.0, bootstrap_values).astype(np.float32)
+
+            loss = agent.learn(next_values=next_values)
             agent.update_target()
-
-            iteration += 1
-            if len(scores) == 0:
-                avg_score = 0.0
-            else:
-                avg_score = (
-                    np.mean(scores_window) if scores_window else np.mean(scores[-100:])
-                )
-            n_ep = len(scores)
-            print(f"\rIter {iteration}\tEpisodes {n_ep}\tAvg: {avg_score:.2f}", end="")
-
-            if n_ep >= 20 and n_ep % 20 < nenvs:
-                print(f"\rIter {iteration}\tEpisodes {n_ep}\tAvg: {avg_score:.2f}")
+            
+            # Периодические проверки
+            if total_episodes_done > 0 and total_episodes_done % 20 == 0:
                 plot_training_results(scores, cfg.PLOT_PATH)
-
-            if avg_score > best_avg_score and avg_score > 0:
-                best_avg_score = avg_score
-                torch.save(model.state_dict(), cfg.CHECKPOINT_PATH)
-                print(f"\nNew Best Model Saved! Avg Score: {best_avg_score:.2f}")
-
-            if avg_score >= cfg.TARGET_SCORE:
-                print(f"\nSolved in {n_ep} episodes!")
-                break
+                avg = np.mean(scores_window)
+                if avg > best_avg_score and avg > 0:
+                    best_avg_score = avg
+                    torch.save(model.state_dict(), cfg.CHECKPOINT_PATH)
+                    print(f"\nSaved Best Model: {best_avg_score:.2f}")
 
     except KeyboardInterrupt:
-        print("\nTraining interrupted by user. Saving plot...")
-        plot_training_results(scores, cfg.PLOT_PATH)
+        print("\nInterrupted.")
     finally:
-        if hasattr(env, "close"):
-            env.close()
-
-    return scores
-
+        envs.close()
+        plot_training_results(scores, cfg.PLOT_PATH)
 
 if __name__ == "__main__":
-    config = Config()
-    train(config)
+    train(Config())
